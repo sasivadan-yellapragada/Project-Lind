@@ -11,7 +11,7 @@ A Python command-line application that retrieves clinical trial information from
   - **Trial Status**
   - **Trial Sponsor**
 - Validates NCT ID format before making the request.
-- Handles API errors gracefully (404, network issues, timeouts).
+- Handles API errors gracefully (invalid/not-found/API errors, network issues, timeouts).
 
 ## Prerequisites
 
@@ -65,7 +65,7 @@ Fetching trial data for NCT04280705 …
 | Scenario | Message |
 |---|---|
 | Invalid NCT ID format | `Error: 'XYZ' does not look like a valid NCT ID.` |
-| Study not found (404) | `Error: No study found for NCT ID 'NCT00000000'.` |
+| Study not found / API error (404/400) | `Error: No study found for NCT ID 'NCT00000000'.` or `Error: API returned HTTP 400.` |
 | No internet connection | `Error: Unable to connect to ClinicalTrials.gov.` |
 | Request timeout | `Error: Request to ClinicalTrials.gov timed out.` |
 
