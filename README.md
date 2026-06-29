@@ -1,17 +1,18 @@
-# Clinical Trials Fetcher
+# Clinical Trials Fetcher (Level 1 - Ingest & Store)
 
-A Python command-line application that retrieves clinical trial information from the [ClinicalTrials.gov API v2](https://clinicaltrials.gov/data-api/api) using a valid **NCT ID**.
+A Python command-line application that retrieves clinical trial information from the [ClinicalTrials.gov API v2](https://clinicaltrials.gov/data-api/api) and stores it locally for analysis.
 
 ## Features
 
-- Fetches study data from the ClinicalTrials.gov REST API v2 endpoint.
-- Extracts and displays:
-  - **Trial Title**
-  - **Trial Phase**
-  - **Trial Status**
-  - **Trial Sponsor**
-- Validates NCT ID format before making the request.
-- Handles invalid NCT IDs, not-found studies, API errors, network issues, and timeouts.
+- **Configurable Bulk Ingestion**: Fetch thousands of trials for any therapeutic area or condition via a single command.
+- **Automated Pagination**: Automatically handles API pagination to pull the entire corpus for your query.
+- **Normalized SQLite Storage**: Stores trial data in a normalized local SQLite database (`trials.db`), including:
+  - `trials` table (NCT ID, Title, Phase, Status, Sponsor, Dates, Enrollment, Summaries).
+  - `trial_conditions` table (linked to `trials`).
+  - `trial_interventions` table (linked to `trials`).
+- **Incremental Sync / Idempotency**: Automatically skips unchanged records and updates modified records on subsequent runs.
+- **Validation**: Spot-checks the local database record count against the total reported by the ClinicalTrials.gov API.
+- **CLI Query Engine**: Query the local database dynamically by phase, status, sponsor, and condition.
 
 ## Prerequisites
 
@@ -35,45 +36,36 @@ pip install -r requirements.txt
 
 ## Usage
 
+The application provides two subcommands: `ingest` and `query`.
+
+### 1. Ingest Data
+Ingest trials by specifying a therapeutic condition.
+
 ```bash
-python clinical_trials.py <NCT_ID>
+python clinical_trials.py ingest --condition "non-small cell lung cancer"
 ```
 
-### Example
+*This will fetch the trials and populate `trials.db`. The script supports idempotency; if you run it again, it will gracefully skip existing unmodified records.*
+
+### 2. Query Local Database
+Query the local SQLite database for specific criteria using combination filters.
 
 ```bash
-python clinical_trials.py NCT04280705
+python clinical_trials.py query --phase PHASE3 --status RECRUITING --sponsor Pfizer --condition "lung cancer"
 ```
 
-**Output:**
-
-```
-Fetching trial data for NCT04280705 …
-
-============================================================
-  Clinical Trial Details  —  NCT04280705
-============================================================
-  Title   : Adaptive COVID-19 Treatment Trial (ACTT)
-  Phase   : PHASE3
-  Status  : COMPLETED
-  Sponsor : National Institute of Allergy and Infectious Diseases (NIAID)
-============================================================
-```
-
-## Error Handling
-
-| Scenario | Message |
-|---|---|
-| Invalid NCT ID format | `Error: 'XYZ' does not look like a valid NCT ID.` |
-| API error / study not found | Displays a clear error message instead of assuming every missing study is exactly HTTP 404. |
-| No internet connection | `Error: Unable to connect to ClinicalTrials.gov.` |
-| Request timeout | `Error: Request to ClinicalTrials.gov timed out.` |
+#### Available Filters:
+- `--phase`: Filter by trial phase (e.g., `PHASE3`, `PHASE1`)
+- `--status`: Filter by recruitment status (e.g., `RECRUITING`, `COMPLETED`)
+- `--sponsor`: Filter by lead sponsor name (e.g., `Pfizer`)
+- `--condition`: Filter by trial condition (e.g., `lung cancer`)
 
 ## Project Structure
 
 ```
 lind_1/
-├── clinical_trials.py   # Main CLI application
+├── clinical_trials.py   # Main CLI application (Ingest & Query)
+├── trials.db            # Local SQLite database (Generated after ingest)
 ├── requirements.txt     # Python dependencies
 ├── progress/            # Daily progress updates
 │   └── day1.md
@@ -85,7 +77,7 @@ lind_1/
 
 This project uses the **ClinicalTrials.gov API v2**:
 
-- **Endpoint**: `GET https://clinicaltrials.gov/api/v2/studies/{nctId}`
+- **Endpoint**: `GET https://clinicaltrials.gov/api/v2/studies`
 - **Documentation**: https://clinicaltrials.gov/data-api/api
 
 ## License
