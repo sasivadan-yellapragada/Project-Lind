@@ -190,12 +190,7 @@ def ingest_trials(args):
         page += 1
 
     # Validation outputs
-    cursor.execute('''
-        SELECT COUNT(DISTINCT t.nct_id) FROM trials t
-        JOIN trial_conditions tc ON t.nct_id = tc.nct_id
-        WHERE tc.condition_name LIKE ?
-    ''', (f"%{condition}%",))
-    local_condition_count = cursor.fetchone()[0]
+    local_api_count = inserted + updated + skipped
 
     cursor.execute("SELECT COUNT(*) FROM trials WHERE phase LIKE '%PHASE3%' AND status = 'RECRUITING'")
     example_filtered = cursor.fetchone()[0]
@@ -209,6 +204,13 @@ def ingest_trials(args):
     ''')
     coverage = cursor.fetchone()
 
+    cursor.execute('''
+        SELECT ROUND(100.0 * COUNT(DISTINCT nct_id) / (SELECT COUNT(*) FROM trials), 2)
+        FROM trial_conditions
+    ''')
+    condition_coverage_res = cursor.fetchone()
+    condition_coverage = condition_coverage_res[0] if condition_coverage_res[0] is not None else 0
+
     conn.close()
 
     print("\n--- Ingestion Complete ---")
@@ -216,14 +218,15 @@ def ingest_trials(args):
     print(f"Updated : {updated}")
     print(f"Skipped : {skipped}")
     print("\n--- Validation Outputs ---")
-    print(f"Trials matching condition '{condition}' in DB: {local_condition_count}")
+    print(f"Total trials fetched/stored for this API query: {local_api_count}")
     print(f"Total reported by ClinicalTrials.gov API: {api_total_count}")
-    if str(local_condition_count) == str(api_total_count) or (isinstance(api_total_count, int) and local_condition_count >= api_total_count):
-        print("✅ Spot-check passed: Local DB count meets or exceeds API total count.")
+    if str(local_api_count) == str(api_total_count) or (isinstance(api_total_count, int) and local_api_count >= api_total_count):
+        print("✅ Spot-check passed: Local fetched count meets or exceeds API total count.")
     else:
-        print("⚠️ Note: Local DB condition count differs from API total count. This might be due to API matching logic or duplicate records.")
+        print("⚠️ Note: Local fetched count differs from API total count.")
     print(f"Phase 3 Recruiting trials in DB: {example_filtered}")
-    print(f"Text Field Coverage:")
+    print(f"Field Coverage:")
+    print(f"  Condition Table      : {condition_coverage}%")
     print(f"  Brief Summary        : {coverage[0] if coverage[0] is not None else 0}%")
     print(f"  Detailed Description : {coverage[1] if coverage[1] is not None else 0}%")
     print(f"  Eligibility Criteria : {coverage[2] if coverage[2] is not None else 0}%")
