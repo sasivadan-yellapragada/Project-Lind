@@ -17,9 +17,6 @@ Build a complete **ETL (Extract, Transform, Load)** pipeline that retrieves all 
 | Database | SQLite |
 | Database Driver | `sqlite3` (built-in) |
 | CLI | `argparse` |
-| Environment Variables | `python-dotenv` |
-| Logging | Python `logging` module |
-| Data Validation | Optional (`Pydantic`) |
 
 ### Database Architecture Decision
 While a centralized RDBMS like MySQL or PostgreSQL was considered, **SQLite** was intentionally chosen for Level 1. SQLite provides zero-configuration, file-based storage that makes setup trivial while still supporting full SQL querying and relational structure. This removes the friction of infrastructure setup for local validation scripts. We will revisit MySQL/PostgreSQL if we move to a production environment requiring concurrent data ingestion or a scaled web backend.
@@ -80,8 +77,7 @@ The API Client is responsible for:
 - Building API request URLs
 - Sending HTTP GET requests
 - Parsing JSON responses
-- Retrying failed requests
-- Handling connection errors
+- Handling basic connection timeouts and HTTP errors
 
 ---
 
@@ -158,8 +154,7 @@ Before insertion:
 
 ### trials
 
-- id
-- nct_id (unique)
+- nct_id (unique, primary key)
 - title
 - phase
 - status
@@ -171,16 +166,14 @@ Before insertion:
 - detailed_description
 - eligibility
 
-### conditions
+### trial_conditions
 
-- id
-- trial_id
+- nct_id (foreign key)
 - condition_name
 
-### interventions
+### trial_interventions
 
-- id
-- trial_id
+- nct_id (foreign key)
 - intervention_name
 - intervention_type
 
@@ -209,20 +202,23 @@ python clinical_trials.py query --phase "Phase 3" --status Recruiting
 
 ---
 
-# Step 9 – Logging
+# Step 9 – CLI Console Output
 
 Example:
 
 ```text
-Connected to SQLite
-Fetching Page 1...
-Inserted 100 Studies
-Fetching Page 2...
-Updated 20 Studies
-Inserted 80 Studies
-Completed
-Total Studies Processed: 200
-Errors: 0
+Starting ingestion for condition: 'Type 2 Diabetes'...
+Fetching page 1...
+
+--- Ingestion Complete ---
+Inserted: 100
+Updated : 20
+Skipped : 80
+
+--- Validation Outputs ---
+Total trials fetched/stored for this API query: 200
+Total reported by ClinicalTrials.gov API: 200
+✅ Spot-check passed: Local fetched count meets or exceeds API total count.
 ```
 
 ---
@@ -264,11 +260,14 @@ lind_1/
 
 ---
 
-# Stretch Goal
+# Stretch Goals / Future
 
-Implement incremental synchronization:
-
-- Detect new studies
-- Update modified studies
-- Insert only new studies
-- Keep the local database synchronized efficiently
+- **Robust Error Handling**: Implement retry logic for failed API requests and timeouts.
+- **Environment Management**: Introduce `python-dotenv` for configuration and secrets.
+- **Logging**: Implement the standard Python `logging` module instead of `print()` statements.
+- **Data Validation**: Use `Pydantic` models for stricter schema validation on API responses.
+- **Incremental Synchronization**:
+  - Detect new studies
+  - Update modified studies
+  - Insert only new studies
+  - Keep the local database synchronized efficiently
