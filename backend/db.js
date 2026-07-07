@@ -1,23 +1,74 @@
 const sqlite3 = require('sqlite3').verbose();
+const fs = require('fs');
 const path = require('path');
 
+const dataDir = process.env.DATA_DIR || __dirname;
+const sourceDbPath = path.resolve(process.env.SOURCE_DB_PATH || path.join(__dirname, '../trials.db'));
+const userDbPath = path.resolve(process.env.USER_DB_PATH || path.join(dataDir, 'user_data.db'));
+
+function ensureDirectory(filePath) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function initializeSourceDbIfMissing() {
+    if (fs.existsSync(sourceDbPath)) return;
+
+    ensureDirectory(sourceDbPath);
+    const setupDb = new sqlite3.Database(sourceDbPath);
+    setupDb.serialize(() => {
+        setupDb.run(`CREATE TABLE IF NOT EXISTS trials (
+            nct_id TEXT PRIMARY KEY,
+            title TEXT,
+            phase TEXT,
+            status TEXT,
+            sponsor TEXT,
+            start_date TEXT,
+            completion_date TEXT,
+            enrollment INTEGER,
+            brief_summary TEXT,
+            detailed_description TEXT,
+            eligibility_criteria TEXT,
+            last_update_date TEXT,
+            raw_json TEXT
+        )`);
+
+        setupDb.run(`CREATE TABLE IF NOT EXISTS trial_conditions (
+            nct_id TEXT,
+            condition_name TEXT,
+            PRIMARY KEY (nct_id, condition_name),
+            FOREIGN KEY (nct_id) REFERENCES trials(nct_id)
+        )`);
+
+        setupDb.run(`CREATE TABLE IF NOT EXISTS trial_interventions (
+            nct_id TEXT,
+            intervention_type TEXT,
+            intervention_name TEXT,
+            PRIMARY KEY (nct_id, intervention_type, intervention_name),
+            FOREIGN KEY (nct_id) REFERENCES trials(nct_id)
+        )`);
+    });
+    setupDb.close();
+    console.warn(`Source database was missing. Created empty trials schema at ${sourceDbPath}.`);
+}
+
+initializeSourceDbIfMissing();
+
 // Connect to read-only source database
-const sourceDbPath = path.resolve(__dirname, '../trials.db');
 const sourceDb = new sqlite3.Database(sourceDbPath, sqlite3.OPEN_READONLY, (err) => {
     if (err) {
         console.error('Error opening source trials.db:', err.message);
     } else {
-        console.log('Connected to source trials.db (Read-Only).');
+        console.log(`Connected to source trials database at ${sourceDbPath} (Read-Only).`);
     }
 });
 
 // Connect to read-write user database
-const userDbPath = path.resolve(__dirname, 'user_data.db');
+ensureDirectory(userDbPath);
 const userDb = new sqlite3.Database(userDbPath, (err) => {
     if (err) {
         console.error('Error opening user_data.db:', err.message);
     } else {
-        console.log('Connected to user_data.db.');
+        console.log(`Connected to user data database at ${userDbPath}.`);
         initializeUserDb();
     }
 });

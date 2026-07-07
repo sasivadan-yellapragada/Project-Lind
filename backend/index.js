@@ -1,13 +1,18 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 require('dotenv').config();
 const { sourceDb, userDb, dbQuery, dbGet, dbRun } = require('./db');
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 5001;
+const frontendDistPath = path.resolve(__dirname, '../frontend/dist');
+
+if (process.env.NODE_ENV !== 'production') {
+    app.use(cors());
+}
 
 const toPositiveInt = (value, fallback, max = 500) => {
     const parsed = Number.parseInt(value, 10);
@@ -81,6 +86,11 @@ const buildTrialWhere = ({ keyword, phase, status, sponsor, condition }) => {
         whereClause: conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '',
         params
     };
+};
+
+const requireExistingTrial = async (nctId) => {
+    if (!nctId) return null;
+    return dbGet(sourceDb, 'SELECT nct_id FROM trials WHERE nct_id = ?', [nctId]);
 };
 
 // GET /api/trials
@@ -185,7 +195,7 @@ app.post('/api/watchlist', async (req, res) => {
     try {
         const { nctId } = req.body;
         if (!nctId) return res.status(400).json({ error: 'nctId required' });
-        const trial = await dbGet(sourceDb, 'SELECT nct_id FROM trials WHERE nct_id = ?', [nctId]);
+        const trial = await requireExistingTrial(nctId);
         if (!trial) return res.status(404).json({ error: 'Trial not found' });
         
         await dbRun(userDb, 'INSERT OR IGNORE INTO watchlist (nct_id) VALUES (?)', [nctId]);
@@ -221,6 +231,8 @@ app.post('/api/notes', async (req, res) => {
     try {
         const { nctId, note } = req.body;
         if (!nctId || !note?.trim()) return res.status(400).json({ error: 'nctId and note required' });
+        const trial = await requireExistingTrial(nctId);
+        if (!trial) return res.status(404).json({ error: 'Trial not found' });
         
         const result = await dbRun(userDb, 'INSERT INTO notes (nct_id, note) VALUES (?, ?)', [nctId, note.trim()]);
         const created = await dbGet(userDb, 'SELECT * FROM notes WHERE id = ?', [result.lastID]);
@@ -270,6 +282,8 @@ app.post('/api/tags', async (req, res) => {
     try {
         const { nctId, tag } = req.body;
         if (!nctId || !tag?.trim()) return res.status(400).json({ error: 'nctId and tag required' });
+        const trial = await requireExistingTrial(nctId);
+        if (!trial) return res.status(404).json({ error: 'Trial not found' });
         
         await dbRun(userDb, 'INSERT OR IGNORE INTO tags (nct_id, tag) VALUES (?, ?)', [nctId, tag.trim()]);
         const created = await dbGet(userDb, 'SELECT * FROM tags WHERE nct_id = ? AND tag = ?', [nctId, tag.trim()]);
@@ -308,6 +322,12 @@ app.delete('/api/tags/:id', async (req, res) => {
     }
 });
 
+app.use(express.static(frontendDistPath));
+
+app.get(/.*/, (req, res) => {
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+});
+
 app.listen(PORT, () => {
-    console.log(`Backend API running on http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });

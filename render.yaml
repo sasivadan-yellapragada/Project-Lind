@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: project-lind
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: USER_DB_PATH
+        value: /var/data/user_data.db
+    disk:
+      name: project-lind-data
+      mountPath: /var/data
+      sizeGB: 1
