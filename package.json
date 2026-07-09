@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "build": "npm --prefix backend ci && npm --prefix frontend ci && npm --prefix frontend run build",
+    "build:ai": "python3 ai_build_corpus.py",
+    "eval:ai": "npm --prefix backend run eval",
     "start": "npm --prefix backend start"
   },
   "engines": {

@@ -1,10 +1,11 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Bookmark } from 'lucide-react';
+import { Brain, LayoutDashboard, Bookmark } from 'lucide-react';
 
 export default function Sidebar() {
   const navItems = [
     { name: 'All Trials', path: '/', icon: <LayoutDashboard size={20} /> },
+    { name: 'Hybrid Q&A', path: '/ask', icon: <Brain size={20} /> },
     { name: 'My Watchlist', path: '/watchlist', icon: <Bookmark size={20} /> },
   ];
 

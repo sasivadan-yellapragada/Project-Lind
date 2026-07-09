@@ -1,16 +1,44 @@
-# React + Vite
+# Project Lind Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This is the React/Vite frontend for Project Lind. It provides the clinical-trials explorer, trial detail workflow, reviewer watchlist, and Hybrid Q&A page.
 
-Currently, two official plugins are available:
+## Routes
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- `/` - paginated trial explorer with search and filters
+- `/trial/:nctId` - trial detail, notes, tags, and watchlist controls
+- `/watchlist` - saved reviewer watchlist
+- `/ask` - Hybrid Q&A over the generated AI corpus
 
-## React Compiler
+## Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Install dependencies from the repository root or this directory:
 
-## Expanding the Oxlint configuration
+```bash
+npm --prefix frontend install
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+Run the frontend dev server:
+
+```bash
+npm --prefix frontend run dev
+```
+
+The frontend API client defaults to `/api`. For split local dev servers, point it at the backend:
+
+```bash
+VITE_API_BASE_URL=http://localhost:5001/api npm --prefix frontend run dev
+```
+
+## Build
+
+```bash
+npm --prefix frontend run build
+```
+
+The production build is written to `frontend/dist` and served by the Express backend when running `npm start` from the repository root.
+
+## Lint
+
+```bash
+npm --prefix frontend run lint
+```

@@ -5,6 +5,7 @@ import Topbar from './components/Topbar';
 import TrialExplorer from './pages/TrialExplorer';
 import TrialDetail from './pages/TrialDetail';
 import Watchlist from './pages/Watchlist';
+import AskAI from './pages/AskAI';
 
 function App() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -27,6 +28,7 @@ function App() {
           <main className="p-4 sm:p-6 lg:p-8 flex-1 overflow-x-hidden">
             <Routes>
               <Route path="/" element={<TrialExplorer activeSearch={activeSearch} />} />
+              <Route path="/ask" element={<AskAI />} />
               <Route path="/trial/:nctId" element={<TrialDetail />} />
               <Route path="/watchlist" element={<Watchlist />} />
             </Routes>

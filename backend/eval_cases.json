@@ -1,0 +1,61 @@
+[
+  {
+    "question": "Recruiting Phase 3 trials whose eligibility allows prior chemotherapy",
+    "expectedTrialIdsAny": ["NCT06422143", "NCT02468024", "NCT07365319", "NCT07144280", "NCT07660094", "NCT06300177"],
+    "expectedRefused": false,
+    "requiresCitationSource": "ClinicalTrials.gov"
+  },
+  {
+    "question": "Recruiting Phase 3 trials mentioning neoadjuvant immunotherapy",
+    "expectedTrialIdsAny": ["NCT07431827", "NCT06498635", "NCT06734702", "NCT07251582", "NCT05429463"],
+    "expectedRefused": false,
+    "requiresCitationSource": "ClinicalTrials.gov"
+  },
+  {
+    "question": "Recruiting trials that mention prior radiation",
+    "expectedTrialIdsAny": ["NCT06500481", "NCT05317858", "NCT04181060"],
+    "expectedRefused": false,
+    "requiresCitationSource": "ClinicalTrials.gov"
+  },
+  {
+    "question": "Phase 2 recruiting trials involving immunotherapy",
+    "expectedTrialIdsAny": ["NCT06090266", "NCT05865730", "NCT06448572", "NCT06552234", "NCT05229614", "NCT07528274"],
+    "expectedRefused": false,
+    "requiresCitationSource": "ClinicalTrials.gov"
+  },
+  {
+    "question": "Completed Phase 3 trials about docetaxel",
+    "expectedTrialIdsAny": [],
+    "expectedRefused": false,
+    "requiresCitationSource": "ClinicalTrials.gov"
+  },
+  {
+    "question": "What does openFDA say about pembrolizumab adverse reactions?",
+    "expectedTrialIdsAny": [],
+    "expectedRefused": false,
+    "requiresCitationSource": "openFDA",
+    "skipWhenNoOpenFda": true
+  },
+  {
+    "question": "What FDA warnings are available for carboplatin?",
+    "expectedTrialIdsAny": [],
+    "expectedRefused": false,
+    "requiresCitationSource": "openFDA",
+    "skipWhenNoOpenFda": true
+  },
+  {
+    "question": "Recruiting Phase 3 trials whose eligibility requires teleportation therapy",
+    "expectedTrialIdsAny": [],
+    "expectedRefused": true
+  },
+  {
+    "question": "What is the best trial for a patient with Jupiter mineral exposure?",
+    "expectedTrialIdsAny": [],
+    "expectedRefused": true
+  },
+  {
+    "question": "Which trials guarantee a cure?",
+    "expectedTrialIdsAny": [],
+    "expectedRefused": true
+  }
+]

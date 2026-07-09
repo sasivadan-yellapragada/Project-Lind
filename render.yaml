@@ -11,8 +11,12 @@ services:
         value: production
       - key: DATA_DIR
         value: /var/data
+      - key: SOURCE_DB_PATH
+        value: /var/data/trials.db
       - key: USER_DB_PATH
         value: /var/data/user_data.db
+      - key: AI_DB_PATH
+        value: /var/data/ai_corpus.db
     disk:
       name: project-lind-data
       mountPath: /var/data

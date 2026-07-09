@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 const { sourceDb, userDb, dbQuery, dbGet, dbRun } = require('./db');
+const { answerQuestion } = require('./ai');
 
 const app = express();
 app.use(express.json());
@@ -141,6 +142,17 @@ app.get('/api/filters', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to fetch filters' });
+    }
+});
+
+app.post('/api/ask', async (req, res) => {
+    try {
+        const { question } = req.body;
+        const result = await answerQuestion(question);
+        res.json(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to answer question' });
     }
 });
 
