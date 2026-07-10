@@ -7,7 +7,7 @@
 ├── backend/
 │   ├── index.js          # Express server and API routes
 │   ├── db.js             # SQLite connections and schema initialization
-│   ├── ai.js             # Hybrid Q&A retrieval
+│   ├── ai.js             # Grounded Q&A retrieval and Ollama synthesis
 │   └── package.json      # Backend start script and dependencies
 ├── frontend/
 │   ├── src/              # React application
@@ -34,7 +34,7 @@ User
   -> SQLite databases
 ```
 
-Express serves both the React app and the API. The frontend calls `/api` on the same origin, so no production CORS configuration is required. Hybrid Q&A uses `AI_DB_PATH` to read a generated retrieval corpus; it does not call a hosted LLM.
+Express serves both the React app and the API. The frontend calls `/api` on the same origin, so no production CORS configuration is required. Grounded Q&A uses `AI_DB_PATH` to read a generated retrieval corpus and calls a local Ollama server for embeddings and answer synthesis; it does not call a hosted LLM.
 
 ## Render Settings
 
@@ -62,6 +62,9 @@ Optional:
 
 ```text
 VITE_API_BASE_URL=/api
+OLLAMA_URL=http://localhost:11434
+OLLAMA_EMBED_MODEL=nomic-embed-text
+OLLAMA_LLM_MODEL=llama3.1:8b
 ```
 
 `VITE_API_BASE_URL` is optional because the frontend defaults to `/api`.
@@ -71,7 +74,7 @@ VITE_API_BASE_URL=/api
 The app currently uses SQLite.
 
 - `trials.db` is the read-only source clinical trials database.
-- `ai_corpus.db` is the generated Hybrid Q&A retrieval database.
+- `ai_corpus.db` is the generated grounded Q&A retrieval database.
 - `user_data.db` stores watchlist, notes, and tags.
 - `trials.db` and `ai_corpus.db` are ignored by Git because they are generated local database artifacts.
 - If `trials.db` is missing on Render, the backend creates an empty source schema so the app still boots.
@@ -83,7 +86,7 @@ For a production data set on Render, either:
 1. Attach a persistent disk and upload or generate `/var/data/trials.db` and `/var/data/ai_corpus.db`.
 2. Migrate source trials, AI chunks, and user data to a managed database such as Postgres.
 
-Without a populated `trials.db`, the deployed UI works but the trial list will be empty. Without `ai_corpus.db`, Hybrid Q&A will decline to answer.
+Without a populated `trials.db`, the deployed UI works but the trial list will be empty. Without `ai_corpus.db` and a reachable Ollama server with the configured models, grounded Q&A will decline to answer.
 
 ## Build Generated Databases
 
@@ -96,6 +99,8 @@ python clinical_trials.py ingest --condition "non-small cell lung cancer"
 Create the AI corpus locally:
 
 ```bash
+ollama pull nomic-embed-text
+ollama pull llama3.1:8b
 npm run build:ai
 ```
 
@@ -115,11 +120,16 @@ Cause: `trials.db` is not present in the deployed environment.
 
 Fix: populate `trials.db` on a persistent disk or migrate the data into a hosted database.
 
-### Hybrid Q&A Refuses Every Question
+### Grounded Q&A Refuses Every Question
 
-Cause: `AI_DB_PATH` does not point to a populated `ai_corpus.db`.
+Cause: `AI_DB_PATH` does not point to a populated `ai_corpus.db`, or Ollama is unavailable.
 
-Fix: build and upload `ai_corpus.db`, or run `npm run build:ai` against the deployed persistent disk if your deployment workflow supports that.
+Fix: build and upload `ai_corpus.db`, or run `npm run build:ai` against the deployed persistent disk if your deployment workflow supports that. Confirm Ollama is running and the configured models are pulled:
+
+```bash
+ollama pull nomic-embed-text
+ollama pull llama3.1:8b
+```
 
 ### Watchlist/Notes/Tags Reset
 

@@ -1,28 +1,18 @@
 import argparse
-import hashlib
 import json
-import math
 import re
 import sqlite3
 import time
-from collections import Counter
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 DEFAULT_SOURCE_DB = "trials.db"
 DEFAULT_AI_DB = "backend/ai_corpus.db"
-EMBED_DIM = 256
-
-STOPWORDS = {
-    "the", "and", "for", "with", "that", "this", "from", "are", "was", "were",
-    "been", "have", "has", "had", "not", "but", "you", "your", "their", "its",
-    "into", "than", "then", "them", "these", "those", "may", "who", "which",
-    "will", "shall", "can", "could", "should", "would", "patients", "patient",
-    "study", "trial", "criteria", "inclusion", "exclusion"
-}
-
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+DEFAULT_OPENFDA_TIMEOUT = 3
 
 def normalize_name(value):
     value = (value or "").lower()
@@ -38,29 +28,39 @@ def split_combination(name):
     return [part.strip() for part in parts if len(part.strip()) >= 4]
 
 
-def tokenize(text):
-    tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
-    return [token for token in tokens if len(token) > 2 and token not in STOPWORDS]
+class OllamaEmbedder:
+    def __init__(self, base_url, model):
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.dim = None
 
+    def embed(self, text):
+        return self.embed_many([text])[0]
 
-def hash_index(token):
-    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    return int(digest[:8], 16) % EMBED_DIM
+    def embed_many(self, texts):
+        payload = json.dumps({"model": self.model, "input": texts}).encode("utf-8")
+        request = Request(
+            f"{self.base_url}/api/embed",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=120) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            raise RuntimeError(
+                f"Ollama embedding failed for model '{self.model}'. "
+                f"Start Ollama and run: ollama pull {self.model}"
+            ) from exc
 
+        vectors = body.get("embeddings") or [body.get("embedding")]
+        if not isinstance(vectors, list) or not vectors or not isinstance(vectors[0], list):
+            raise RuntimeError("Ollama embedding response did not include a vector")
 
-def embed_text(text):
-    counts = Counter(tokenize(text))
-    vector = [0.0] * EMBED_DIM
-    if not counts:
-        return vector
-
-    for token, count in counts.items():
-        vector[hash_index(token)] += 1.0 + math.log(count)
-
-    norm = math.sqrt(sum(value * value for value in vector))
-    if not norm:
-        return vector
-    return [round(value / norm, 6) for value in vector]
+        if self.dim is None:
+            self.dim = len(vectors[0])
+        return [[round(float(value), 8) for value in vector] for vector in vectors]
 
 
 def chunk_text(text, max_chars=1800, overlap=180):
@@ -99,7 +99,9 @@ def setup_ai_db(conn):
             drug_name TEXT,
             title TEXT,
             text TEXT NOT NULL,
-            vector_json TEXT NOT NULL
+            vector_json TEXT NOT NULL,
+            embedding_model TEXT NOT NULL,
+            embedding_dim INTEGER NOT NULL
         );
 
         CREATE INDEX idx_ai_chunks_nct ON ai_chunks(nct_id);
@@ -135,17 +137,70 @@ def setup_ai_db(conn):
     )
 
 
-def insert_chunk(conn, chunk_id, nct_id, source, section, drug_name, title, text):
+def insert_chunk(conn, embedder, chunk_id, nct_id, source, section, drug_name, title, text):
+    vector = embedder.embed(text)
+    insert_chunk_vector(conn, embedder, vector, chunk_id, nct_id, source, section, drug_name, title, text)
+
+
+def insert_chunk_vector(conn, embedder, vector, chunk_id, nct_id, source, section, drug_name, title, text):
     conn.execute(
         """
-        INSERT INTO ai_chunks (chunk_id, nct_id, source, section, drug_name, title, text, vector_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ai_chunks (
+            chunk_id, nct_id, source, section, drug_name, title, text,
+            vector_json, embedding_model, embedding_dim
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (chunk_id, nct_id, source, section, drug_name, title, text, json.dumps(embed_text(text))),
+        (
+            chunk_id,
+            nct_id,
+            source,
+            section,
+            drug_name,
+            title,
+            text,
+            json.dumps(vector),
+            embedder.model,
+            len(vector),
+        ),
     )
 
 
-def build_trial_chunks(source_conn, ai_conn):
+def insert_chunk_batch(conn, embedder, rows, batch_size=8, label="chunks"):
+    for start in range(0, len(rows), batch_size):
+        batch = rows[start:start + batch_size]
+        vectors = embedder.embed_many([row["text"] for row in batch])
+        conn.executemany(
+            """
+            INSERT INTO ai_chunks (
+                chunk_id, nct_id, source, section, drug_name, title, text,
+                vector_json, embedding_model, embedding_dim
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["chunk_id"],
+                    row["nct_id"],
+                    row["source"],
+                    row["section"],
+                    row["drug_name"],
+                    row["title"],
+                    row["text"],
+                    json.dumps(vector),
+                    embedder.model,
+                    len(vector),
+                )
+                for row, vector in zip(batch, vectors)
+            ],
+        )
+        conn.commit()
+        done = min(start + len(batch), len(rows))
+        if done == len(rows) or done % 200 == 0:
+            print(f"Embedded {done}/{len(rows)} {label}", flush=True)
+
+
+def build_trial_chunks(source_conn, ai_conn, embedder):
     rows = source_conn.execute(
         """
         SELECT nct_id, title, brief_summary, detailed_description, eligibility_criteria
@@ -159,22 +214,23 @@ def build_trial_chunks(source_conn, ai_conn):
         ("Eligibility", "eligibility_criteria"),
     ]
     total = 0
+    chunk_rows = []
     for row in rows:
         values = dict(row)
         for section, field in sections:
             for index, chunk in enumerate(chunk_text(values.get(field))):
                 chunk_id = f"{values['nct_id']}:{field}:{index}"
-                insert_chunk(
-                    ai_conn,
-                    chunk_id,
-                    values["nct_id"],
-                    "ClinicalTrials.gov",
-                    section,
-                    None,
-                    values.get("title"),
-                    chunk,
-                )
+                chunk_rows.append({
+                    "chunk_id": chunk_id,
+                    "nct_id": values["nct_id"],
+                    "source": "ClinicalTrials.gov",
+                    "section": section,
+                    "drug_name": None,
+                    "title": values.get("title"),
+                    "text": chunk,
+                })
                 total += 1
+    insert_chunk_batch(ai_conn, embedder, chunk_rows, label="trial chunks")
     return total
 
 
@@ -193,10 +249,10 @@ def top_drug_interventions(source_conn, limit):
     return [row["intervention_name"] for row in rows]
 
 
-def openfda_get(path, params):
+def openfda_get(path, params, timeout=DEFAULT_OPENFDA_TIMEOUT):
     url = f"https://api.fda.gov/{path}.json?{urlencode(params)}"
     try:
-        with urlopen(url, timeout=30) as response:
+        with urlopen(url, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         if exc.code == 404:
@@ -265,7 +321,7 @@ def fetch_adverse_events(drug_name):
     ]
 
 
-def build_openfda_enrichment(source_conn, ai_conn, max_drugs, skip_openfda):
+def build_openfda_enrichment(source_conn, ai_conn, embedder, max_drugs, skip_openfda):
     drugs = top_drug_interventions(source_conn, max_drugs)
     fetched_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     stats = {"total_interventions": len(drugs), "matched": 0, "unmatched": 0}
@@ -275,6 +331,7 @@ def build_openfda_enrichment(source_conn, ai_conn, max_drugs, skip_openfda):
         return stats
 
     for drug in drugs:
+        print(f"Fetching openFDA evidence for {drug}", flush=True)
         label = fetch_openfda_label(drug)
         if not label:
             stats["unmatched"] += 1
@@ -310,7 +367,7 @@ def build_openfda_enrichment(source_conn, ai_conn, max_drugs, skip_openfda):
         ]
         for section, text in label_sections:
             for index, chunk in enumerate(chunk_text(text)):
-                insert_chunk(ai_conn, f"openfda:{drug}:{section}:{index}", None, "openFDA", section, drug, drug, chunk)
+                insert_chunk(ai_conn, embedder, f"openfda:{drug}:{section}:{index}", None, "openFDA", section, drug, drug, chunk)
 
         for event in fetch_adverse_events(drug):
             ai_conn.execute(
@@ -326,7 +383,7 @@ def build_openfda_enrichment(source_conn, ai_conn, max_drugs, skip_openfda):
         ).fetchall()
         if event_rows:
             event_text = "; ".join([f"{row['reaction']} ({row['report_count']} reports)" for row in event_rows])
-            insert_chunk(ai_conn, f"openfda:{drug}:FAERS:0", None, "openFDA", "FDA Adverse Event Reports", drug, drug, event_text)
+            insert_chunk(ai_conn, embedder, f"openfda:{drug}:FAERS:0", None, "openFDA", "FDA Adverse Event Reports", drug, drug, event_text)
 
     return stats
 
@@ -337,16 +394,20 @@ def main():
     parser.add_argument("--ai-db", default=DEFAULT_AI_DB)
     parser.add_argument("--max-openfda-drugs", type=int, default=20)
     parser.add_argument("--skip-openfda", action="store_true")
+    parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
+    parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
     args = parser.parse_args()
 
+    embedder = OllamaEmbedder(args.ollama_url, args.embedding_model)
+    embedder.embed("clinical trials retrieval preflight")
     source_conn = sqlite3.connect(args.source_db)
     source_conn.row_factory = sqlite3.Row
     ai_conn = sqlite3.connect(args.ai_db)
     ai_conn.row_factory = sqlite3.Row
     setup_ai_db(ai_conn)
 
-    trial_chunks = build_trial_chunks(source_conn, ai_conn)
-    fda_stats = build_openfda_enrichment(source_conn, ai_conn, args.max_openfda_drugs, args.skip_openfda)
+    trial_chunks = build_trial_chunks(source_conn, ai_conn, embedder)
+    fda_stats = build_openfda_enrichment(source_conn, ai_conn, embedder, args.max_openfda_drugs, args.skip_openfda)
     total_chunks = ai_conn.execute("SELECT COUNT(*) FROM ai_chunks").fetchone()[0]
 
     coverage = {
@@ -356,7 +417,10 @@ def main():
         "openfda_matched": fda_stats["matched"],
         "openfda_unmatched": fda_stats["unmatched"],
         "openfda_coverage_pct": round(100 * fda_stats["matched"] / max(1, fda_stats["total_interventions"]), 2),
-        "embedding": f"local-hash-bow-{EMBED_DIM}",
+        "embedding_model": embedder.model,
+        "embedding_dim": embedder.dim,
+        "vector_store": "SQLite ai_chunks table with vector_json embeddings and exact cosine scan in backend/ai.js",
+        "answer_model": "Ollama local LLM configured by OLLAMA_LLM_MODEL, default llama3.1:8b",
     }
 
     for key, value in coverage.items():

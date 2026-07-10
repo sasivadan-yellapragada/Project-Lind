@@ -35,8 +35,8 @@ export default function AskAI() {
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">Hybrid Q&A</h2>
-          <p className="text-sm text-slate-500 mt-1">Structured SQLite filters plus semantic retrieval over trial text and openFDA evidence.</p>
+          <h2 className="text-2xl font-bold text-slate-900">Grounded Q&A</h2>
+          <p className="text-sm text-slate-500 mt-1">Ollama embeddings, SQLite vector search, and local LLM synthesis over trial text and openFDA evidence.</p>
         </div>
         <div className="hidden sm:flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-md">
           <ShieldCheck size={16} />
