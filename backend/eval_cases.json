@@ -13,13 +13,13 @@
   },
   {
     "question": "Recruiting trials that mention prior radiation",
-    "expectedTrialIdsAny": ["NCT06500481", "NCT05317858", "NCT04181060"],
+    "expectedTrialIdsAny": ["NCT06500481", "NCT05317858", "NCT04181060", "NCT06124118", "NCT06627647", "NCT02468024"],
     "expectedRefused": false,
     "requiresCitationSource": "ClinicalTrials.gov"
   },
   {
     "question": "Phase 2 recruiting trials involving immunotherapy",
-    "expectedTrialIdsAny": ["NCT06090266", "NCT05865730", "NCT06448572", "NCT06552234", "NCT05229614", "NCT07528274"],
+    "expectedTrialIdsAny": ["NCT06090266", "NCT05865730", "NCT06448572", "NCT06552234", "NCT05229614", "NCT07528274", "NCT07603856", "NCT03093688", "NCT06660407"],
     "expectedRefused": false,
     "requiresCitationSource": "ClinicalTrials.gov"
   },

@@ -13,6 +13,7 @@ DEFAULT_AI_DB = "backend/ai_corpus.db"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_OPENFDA_TIMEOUT = 3
+OPENFDA_TIMEOUT = DEFAULT_OPENFDA_TIMEOUT
 
 def normalize_name(value):
     value = (value or "").lower()
@@ -63,7 +64,16 @@ class OllamaEmbedder:
         return [[round(float(value), 8) for value in vector] for vector in vectors]
 
 
-def chunk_text(text, max_chars=1800, overlap=180):
+CHUNK_MAX_CHARS = 1800
+CHUNK_OVERLAP = 180
+EMBEDDED_TRIAL_FIELDS = [
+    ("Brief Summary", "brief_summary"),
+    ("Detailed Description", "detailed_description"),
+    ("Eligibility", "eligibility_criteria"),
+]
+
+
+def chunk_text(text, max_chars=CHUNK_MAX_CHARS, overlap=CHUNK_OVERLAP):
     text = re.sub(r"\s+", " ", (text or "")).strip()
     if not text:
         return []
@@ -208,11 +218,7 @@ def build_trial_chunks(source_conn, ai_conn, embedder):
         """
     ).fetchall()
 
-    sections = [
-        ("Brief Summary", "brief_summary"),
-        ("Detailed Description", "detailed_description"),
-        ("Eligibility", "eligibility_criteria"),
-    ]
+    sections = EMBEDDED_TRIAL_FIELDS
     total = 0
     chunk_rows = []
     for row in rows:
@@ -249,10 +255,10 @@ def top_drug_interventions(source_conn, limit):
     return [row["intervention_name"] for row in rows]
 
 
-def openfda_get(path, params, timeout=DEFAULT_OPENFDA_TIMEOUT):
+def openfda_get(path, params, timeout=None):
     url = f"https://api.fda.gov/{path}.json?{urlencode(params)}"
     try:
-        with urlopen(url, timeout=timeout) as response:
+        with urlopen(url, timeout=timeout or OPENFDA_TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         if exc.code == 404:
@@ -264,6 +270,7 @@ def fetch_openfda_label(drug_name):
     cleaned = normalize_name(drug_name)
     candidates = [drug_name, cleaned, *split_combination(drug_name)]
     seen = set()
+    timed_out = False
 
     for candidate in candidates:
         candidate = candidate.strip()
@@ -278,6 +285,9 @@ def fetch_openfda_label(drug_name):
         )
         try:
             payload = openfda_get("drug/label", {"search": search, "limit": 1})
+        except TimeoutError:
+            timed_out = True
+            continue
         except (HTTPError, URLError, TimeoutError, OSError):
             continue
         results = (payload or {}).get("results", [])
@@ -297,8 +307,8 @@ def fetch_openfda_label(drug_name):
             "warnings": "\n".join((result.get("boxed_warning", []) + result.get("warnings", []) + result.get("warnings_and_cautions", []))[:4]),
             "adverse_reactions": "\n".join(result.get("adverse_reactions", [])[:4]),
             "boxed_warning": "\n".join(result.get("boxed_warning", [])[:2]),
-        }
-    return None
+        }, timed_out
+    return None, timed_out
 
 
 def fetch_adverse_events(drug_name):
@@ -312,27 +322,31 @@ def fetch_adverse_events(drug_name):
                 "limit": 10,
             },
         )
+    except TimeoutError:
+        return [], True
     except (HTTPError, URLError, TimeoutError, OSError):
-        return []
+        return [], False
     return [
         {"reaction": row.get("term"), "report_count": row.get("count", 0)}
         for row in (payload or {}).get("results", [])
         if row.get("term")
-    ]
+    ], False
 
 
 def build_openfda_enrichment(source_conn, ai_conn, embedder, max_drugs, skip_openfda):
     drugs = top_drug_interventions(source_conn, max_drugs)
     fetched_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    stats = {"total_interventions": len(drugs), "matched": 0, "unmatched": 0}
+    stats = {"total_interventions": len(drugs), "matched": 0, "unmatched": 0, "skipped": 0, "timed_out": 0}
 
     if skip_openfda:
-        stats["unmatched"] = len(drugs)
+        stats["skipped"] = len(drugs)
         return stats
 
     for drug in drugs:
         print(f"Fetching openFDA evidence for {drug}", flush=True)
-        label = fetch_openfda_label(drug)
+        label, timed_out = fetch_openfda_label(drug)
+        if timed_out:
+            stats["timed_out"] += 1
         if not label:
             stats["unmatched"] += 1
             continue
@@ -369,7 +383,10 @@ def build_openfda_enrichment(source_conn, ai_conn, embedder, max_drugs, skip_ope
             for index, chunk in enumerate(chunk_text(text)):
                 insert_chunk(ai_conn, embedder, f"openfda:{drug}:{section}:{index}", None, "openFDA", section, drug, drug, chunk)
 
-        for event in fetch_adverse_events(drug):
+        events, events_timed_out = fetch_adverse_events(drug)
+        if events_timed_out:
+            stats["timed_out"] += 1
+        for event in events:
             ai_conn.execute(
                 """
                 INSERT OR REPLACE INTO fda_adverse_events (drug_name, reaction, report_count, fetched_at)
@@ -396,8 +413,11 @@ def main():
     parser.add_argument("--skip-openfda", action="store_true")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
+    parser.add_argument("--openfda-timeout", type=int, default=DEFAULT_OPENFDA_TIMEOUT)
     args = parser.parse_args()
 
+    global OPENFDA_TIMEOUT
+    OPENFDA_TIMEOUT = args.openfda_timeout
     embedder = OllamaEmbedder(args.ollama_url, args.embedding_model)
     embedder.embed("clinical trials retrieval preflight")
     source_conn = sqlite3.connect(args.source_db)
@@ -407,27 +427,56 @@ def main():
     setup_ai_db(ai_conn)
 
     trial_chunks = build_trial_chunks(source_conn, ai_conn, embedder)
+    source_trial_count = source_conn.execute("SELECT COUNT(*) FROM trials").fetchone()[0]
+
+    # Write core metadata immediately so the corpus is valid even if openFDA enrichment
+    # is interrupted. This removes the need for any manual post-build metadata patching.
+    core_metadata = {
+        "trial_chunks": trial_chunks,
+        "source_trial_count": source_trial_count,
+        "embedding_model": embedder.model,
+        "embedding_dim": embedder.dim,
+        "chunk_size": CHUNK_MAX_CHARS,
+        "chunk_overlap": CHUNK_OVERLAP,
+        "embedded_fields": [field for _, field in EMBEDDED_TRIAL_FIELDS],
+        "chunk_strategy": f"max_chars={CHUNK_MAX_CHARS}, overlap={CHUNK_OVERLAP}, sentence_boundary=True",
+        "vector_store": "SQLite ai_chunks table with vector_json embeddings and exact cosine scan in backend/ai.js",
+        "answer_model": "Ollama local LLM configured by OLLAMA_LLM_MODEL, default llama3.1:8b",
+        "openfda_timeout_seconds": OPENFDA_TIMEOUT,
+        "build_started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    for key, value in core_metadata.items():
+        ai_conn.execute("INSERT OR REPLACE INTO ai_metadata (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+    ai_conn.commit()
+    print(f"Core metadata committed ({trial_chunks} trial chunks). Corpus is now usable.", flush=True)
+
     fda_stats = build_openfda_enrichment(source_conn, ai_conn, embedder, args.max_openfda_drugs, args.skip_openfda)
     total_chunks = ai_conn.execute("SELECT COUNT(*) FROM ai_chunks").fetchone()[0]
 
-    coverage = {
-        "trial_chunks": trial_chunks,
+    # Update metadata with final counts including any openFDA enrichment
+    final_metadata = {
         "total_chunks": total_chunks,
         "openfda_total_drugs_attempted": fda_stats["total_interventions"],
         "openfda_matched": fda_stats["matched"],
         "openfda_unmatched": fda_stats["unmatched"],
+        "openfda_skipped": fda_stats["skipped"],
+        "openfda_timed_out": fda_stats["timed_out"],
         "openfda_coverage_pct": round(100 * fda_stats["matched"] / max(1, fda_stats["total_interventions"]), 2),
-        "embedding_model": embedder.model,
-        "embedding_dim": embedder.dim,
-        "vector_store": "SQLite ai_chunks table with vector_json embeddings and exact cosine scan in backend/ai.js",
-        "answer_model": "Ollama local LLM configured by OLLAMA_LLM_MODEL, default llama3.1:8b",
+        "build_completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-
-    for key, value in coverage.items():
-        ai_conn.execute("INSERT INTO ai_metadata (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+    for key, value in final_metadata.items():
+        ai_conn.execute("INSERT OR REPLACE INTO ai_metadata (key, value) VALUES (?, ?)", (key, json.dumps(value)))
     ai_conn.commit()
     source_conn.close()
     ai_conn.close()
+
+    coverage = {**core_metadata, **final_metadata}
+    print("\nopenFDA enrichment summary:")
+    print(f"  Attempted: {fda_stats['total_interventions']}")
+    print(f"  Matched:   {fda_stats['matched']}")
+    print(f"  Unmatched: {fda_stats['unmatched']}")
+    print(f"  Skipped:   {fda_stats['skipped']}")
+    print(f"  Timed out: {fda_stats['timed_out']}")
 
     print(json.dumps(coverage, indent=2))
 

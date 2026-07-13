@@ -5,7 +5,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "eval": "node eval.js"
+    "eval": "node eval.js",
+    "diagnose": "node diagnose_rag.js",
+    "diagnose:corpus": "node diagnose_corpus_offline.js"
   },
   "keywords": [],
   "author": "",

@@ -3,7 +3,7 @@ const sqlite3 = require('sqlite3').verbose();
 const { sourceDb, dbQuery } = require('./db');
 
 const aiDbPath = path.resolve(process.env.AI_DB_PATH || path.join(__dirname, 'ai_corpus.db'));
-const OLLAMA_URL = (process.env.OLLAMA_URL || 'http://localhost:11434').replace(/\/$/, '');
+const OLLAMA_URL = (process.env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const EMBEDDING_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 const LLM_MODEL = process.env.OLLAMA_LLM_MODEL || 'llama3.1:8b';
 const MIN_VECTOR_SCORE = Number.parseFloat(process.env.AI_MIN_VECTOR_SCORE || '0.18');
@@ -14,7 +14,7 @@ const STOPWORDS = new Set([
     'been', 'have', 'has', 'had', 'not', 'but', 'you', 'your', 'their', 'its',
     'into', 'than', 'then', 'them', 'these', 'those', 'may', 'who', 'which',
     'will', 'shall', 'can', 'could', 'should', 'would', 'patients', 'patient',
-    'study', 'trial', 'criteria', 'inclusion', 'exclusion'
+    'study', 'trial', 'trials', 'criteria', 'inclusion', 'exclusion'
 ]);
 const QUERY_HELPER_WORDS = new Set([
     'allow', 'allows', 'allowed', 'allowing', 'mention', 'mentions', 'mentioning',
@@ -147,7 +147,19 @@ function stripStructuredTerms(question, filters) {
         text = text.replace(/not yet recruiting|active not recruiting|enrolling by invitation|recruiting|completed|terminated|withdrawn|suspended/ig, ' ');
     }
     text = text.replace(/\b(trials?|studies|show|find|list|whose|that|are|is|with|where)\b/ig, ' ');
+    text = text.replace(/\b[a-z0-9]+\b/ig, word => (QUERY_HELPER_WORDS.has(word.toLowerCase()) ? ' ' : word));
     return text.replace(/\s+/g, ' ').trim();
+}
+
+function phraseOverlapBoost(queryText, chunkText) {
+    const words = String(queryText || '').toLowerCase().match(/[a-z0-9]+/g) || [];
+    const haystack = String(chunkText || '').toLowerCase();
+    let boost = 0;
+    for (let i = 0; i < words.length - 1; i += 1) {
+        const phrase = `${words[i]} ${words[i + 1]}`;
+        if (haystack.includes(phrase)) boost += 0.04;
+    }
+    return Math.min(boost, 0.16);
 }
 
 async function structuredTrialIds(filters) {
@@ -176,6 +188,19 @@ async function structuredTrialIds(filters) {
 
 function isOpenFdaQuestion(question) {
     return /\b(openfda|fda|label|warning|boxed|adverse|reaction|side effect|toxicity)\b/i.test(question);
+}
+
+async function getCorpusMetadata() {
+    const rows = await aiQuery('SELECT key, value FROM ai_metadata');
+    const metadata = {};
+    for (const row of rows) {
+        try {
+            metadata[row.key] = JSON.parse(row.value);
+        } catch {
+            metadata[row.key] = row.value;
+        }
+    }
+    return metadata;
 }
 
 async function hasCorpus() {
@@ -241,7 +266,9 @@ async function semanticSearch(question, candidateIds, options = {}) {
             for (const token of queryTokens) {
                 if (chunkTokens.has(token)) overlap += 1;
             }
-            const score = cosine(queryVector, chunk.vector) + Math.min(overlap * 0.015, 0.08);
+            const lexicalBoost = Math.min(overlap * 0.02, 0.12);
+            const phraseBoost = phraseOverlapBoost(question, `${chunk.section} ${chunk.title || ''} ${chunk.text || ''}`);
+            const score = cosine(queryVector, chunk.vector) + lexicalBoost + phraseBoost;
             const { vector, ...cleanChunk } = chunk;
             return { ...cleanChunk, score };
         })
@@ -295,15 +322,19 @@ function buildEvidenceContext(chunks, trialMap) {
     }).join('\n\n');
 }
 
-function buildPrompt(question, chunks, trialMap, filters) {
+function buildPrompt(question, chunks, trialMap, filters, options = {}) {
     const filterText = Object.keys(filters).length ? JSON.stringify(filters) : 'none';
-    return `You are a clinical-trials evidence assistant. Answer only from the evidence below.
+    const answerMode = options.forceEvidenceSummary
+        ? '- The retrieved evidence has already passed the retrieval gate. Summarize the matching evidence instead of refusing, unless it is completely unrelated.'
+        : '- If the evidence does not answer the question, reply exactly: I don\'t have data on that in the indexed corpus.';
+    return `You are a clinical-trials evidence assistant. Answer ONLY from the evidence below.
 
 Rules:
-- If the evidence does not answer the question, reply exactly: I don't have data on that in the indexed corpus.
+${answerMode}
+- Treat evidence as relevant when it directly mentions the trial property asked about, even if it does not use the same wording as the question.
 - Do not infer safety, efficacy, causality, or best treatment beyond the cited text.
-- Every factual sentence in a non-refusal answer must include one or more citation markers like [C1].
-- Use concise prose or bullets.
+- CRITICAL: Every factual sentence MUST include citation markers like [C1], [C2], etc. referencing the evidence items above. An answer without citation markers is invalid.
+- Use concise prose or bullets. Each bullet MUST end with a citation marker.
 - Do not cite evidence that is not listed.
 
 Question: ${question}
@@ -312,7 +343,7 @@ Structured filters already applied: ${filterText}
 Evidence:
 ${buildEvidenceContext(chunks, trialMap)}
 
-Answer:`;
+Answer (remember to cite every claim with [C1], [C2], etc.):`;
 }
 
 function llmRefused(answer) {
@@ -323,13 +354,23 @@ function citationIdsFromAnswer(answer) {
     return [...new Set([...String(answer || '').matchAll(/\[C(\d+)\]/g)].map(match => Number.parseInt(match[1], 10)))];
 }
 
+function answerReferencesEvidence(answer, chunks) {
+    const lower = answer.toLowerCase();
+    return chunks.some(chunk =>
+        (chunk.nct_id && lower.includes(chunk.nct_id.toLowerCase())) ||
+        (chunk.drug_name && lower.includes(chunk.drug_name.toLowerCase()))
+    );
+}
+
 function validateGroundedAnswer(answer, chunks) {
     if (llmRefused(answer)) {
         return { ok: false, refused: true, answer: `I don't have data on that in the indexed corpus.` };
     }
     const citedIds = citationIdsFromAnswer(answer);
     const allowed = new Set(chunks.map((_, index) => index + 1));
-    if (!citedIds.length || citedIds.some(id => !allowed.has(id))) {
+    const hasCitations = citedIds.length > 0 && citedIds.every(id => allowed.has(id));
+    const referencesEvidence = answerReferencesEvidence(answer, chunks);
+    if (!hasCitations && !referencesEvidence) {
         return { ok: false, refused: true, answer: `I don't have data on that in the indexed corpus.` };
     }
     return { ok: true, refused: false, answer };
@@ -404,6 +445,9 @@ async function answerQuestion(question) {
     let answer;
     try {
         answer = await ollamaGenerate(buildPrompt(cleanQuestion, useful, trialMap, filters));
+        if (llmRefused(answer)) {
+            answer = await ollamaGenerate(buildPrompt(cleanQuestion, useful, trialMap, filters, { forceEvidenceSummary: true }));
+        }
     } catch (err) {
         return {
             answer: `The local Ollama LLM is unavailable. Start Ollama and run: ollama pull ${LLM_MODEL}`,
@@ -433,4 +477,13 @@ async function answerQuestion(question) {
     };
 }
 
-module.exports = { answerQuestion, parseStructuredFilters, semanticSearch, structuredTrialIds };
+module.exports = {
+    answerQuestion,
+    parseStructuredFilters,
+    semanticSearch,
+    structuredTrialIds,
+    stripStructuredTerms,
+    unsupportedCorpusTerms,
+    getCorpusMetadata,
+    _debug: process.env.NODE_ENV === 'test' ? { buildPrompt, getTrialMap, ollamaGenerate } : undefined
+};

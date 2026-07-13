@@ -5,7 +5,11 @@
   "scripts": {
     "build": "npm --prefix backend ci && npm --prefix frontend ci && npm --prefix frontend run build",
     "build:ai": "python3 ai_build_corpus.py",
+    "build:ai:trial-only": "python3 ai_build_corpus.py --skip-openfda",
     "eval:ai": "npm --prefix backend run eval",
+    "eval:trial-only": "EVAL_TRIAL_ONLY=1 npm --prefix backend run eval",
+    "diagnose:corpus": "node backend/diagnose_corpus_offline.js",
+    "diagnose:ai": "node backend/diagnose_rag.js",
     "start": "npm --prefix backend start"
   },
   "engines": {

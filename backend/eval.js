@@ -2,11 +2,20 @@ const fs = require('fs');
 const path = require('path');
 process.env.NODE_ENV = 'test';
 
-const { answerQuestion, parseStructuredFilters, semanticSearch, structuredTrialIds } = require('./ai');
+const { answerQuestion, parseStructuredFilters, semanticSearch, structuredTrialIds, getCorpusMetadata } = require('./ai');
+const sqlite3 = require('sqlite3').verbose();
+const aiDbPath = path.resolve(process.env.AI_DB_PATH || path.join(__dirname, 'ai_corpus.db'));
 
 async function hasOpenFdaCorpus() {
-    const result = await answerQuestion('openFDA adverse reactions pembrolizumab');
-    return result.citations.some(citation => citation.source === 'openFDA');
+    const db = new sqlite3.Database(aiDbPath, sqlite3.OPEN_READONLY);
+    const row = await new Promise((resolve, reject) => {
+        db.get("SELECT COUNT(*) AS c FROM ai_chunks WHERE source = 'openFDA'", [], (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+        });
+    });
+    db.close();
+    return (row?.c || 0) > 0;
 }
 
 function scoreCase(testCase, result) {
@@ -34,6 +43,16 @@ function retrievalOnlyPass(testCase, retrievedTrials) {
     if (testCase.expectedRefused) return retrievedTrials.length === 0;
     if (expectedSet.size === 0) return retrievedTrials.length > 0;
     return [...expectedSet].some(id => retrievedTrials.includes(id));
+}
+
+async function ollamaReachable() {
+    const url = (process.env.OLLAMA_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
+    try {
+        const response = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(3000) });
+        return response.ok;
+    } catch {
+        return false;
+    }
 }
 
 async function compareRetrievalModes(testCases) {
@@ -70,8 +89,14 @@ async function compareRetrievalModes(testCases) {
 
 async function main() {
     const cases = JSON.parse(fs.readFileSync(path.join(__dirname, 'eval_cases.json'), 'utf8'));
-    const openFdaAvailable = await hasOpenFdaCorpus();
-    const runnable = cases.filter(testCase => !(testCase.skipWhenNoOpenFda && !openFdaAvailable));
+    const trialOnly = process.env.EVAL_TRIAL_ONLY === '1';
+    const openFdaAvailable = trialOnly ? false : await hasOpenFdaCorpus();
+    const metadata = await getCorpusMetadata();
+    const ollamaUp = await ollamaReachable();
+    const runnable = cases.filter(testCase => {
+        if (trialOnly && testCase.requiresCitationSource === 'openFDA') return false;
+        return !(testCase.skipWhenNoOpenFda && !openFdaAvailable);
+    });
     const results = [];
 
     for (const testCase of runnable) {
@@ -96,16 +121,39 @@ async function main() {
         groundingAccuracy: totals.grounding / totals.cases,
         passRate: totals.passed / totals.cases
     };
-    const retrievalModeComparison = await compareRetrievalModes(runnable);
+    const retrievalModeComparison = ollamaUp
+        ? await compareRetrievalModes(runnable)
+        : { skipped: 'Ollama unavailable' };
+
+    console.log(`Mode: ${trialOnly ? 'trial-only (openFDA excluded)' : openFdaAvailable ? 'full (openFDA present)' : 'trial-only (no openFDA chunks)'}`);
+    console.log(`Ollama: ${ollamaUp ? 'reachable' : 'unreachable — start Ollama before running eval'}`);
+    if (metadata.chunk_size || metadata.embedding_model) {
+        console.log(`Corpus: chunk_size=${metadata.chunk_size || 1800} overlap=${metadata.chunk_overlap || 180} embed=${metadata.embedding_model || 'nomic-embed-text'}`);
+    }
 
     for (const row of results) {
         const mark = row.scored.pass ? 'PASS' : 'FAIL';
         console.log(`${mark} ${row.testCase.question}`);
         if (!row.scored.pass) {
+            console.log(`  retrieval=${row.scored.retrievalPass} refusal=${row.scored.refusalPass} citation=${row.scored.citationPass} grounding=${row.scored.groundingPass}`);
             console.log(`  retrieved=${JSON.stringify(row.result.retrievedTrials)} refused=${row.result.refused}`);
-            console.log(`  citations=${JSON.stringify(row.result.citations)}`);
+            if (row.result.answer) console.log(`  answer=${row.result.answer.slice(0, 200)}`);
         }
     }
+
+    const spotlight = {
+        groundedWithCitations: results.find(row => !row.testCase.expectedRefused && row.scored.pass),
+        unsupportedRefusal: results.find(row => row.testCase.expectedRefused && row.testCase.question.includes('teleportation'))
+    };
+    console.log('\nSpotlight targets');
+    console.log(JSON.stringify({
+        groundedWithCitations: spotlight.groundedWithCitations
+            ? { pass: true, question: spotlight.groundedWithCitations.testCase.question }
+            : { pass: false },
+        unsupportedRefusal: spotlight.unsupportedRefusal
+            ? { pass: spotlight.unsupportedRefusal.scored.refusalPass, question: spotlight.unsupportedRefusal.testCase.question }
+            : { pass: false }
+    }, null, 2));
 
     console.log('\nMetrics');
     console.log(JSON.stringify(metrics, null, 2));
@@ -113,10 +161,16 @@ async function main() {
     console.log(JSON.stringify(retrievalModeComparison, null, 2));
     console.log('\nThresholds: retrieval >= 0.75, citation >= 0.90, grounding >= 0.95, refusal = 1.00');
 
-    const ok = metrics.retrievalAccuracy >= 0.75
+    const ok = ollamaUp
+        && metrics.retrievalAccuracy >= 0.75
         && metrics.citationAccuracy >= 0.90
         && metrics.groundingAccuracy >= 0.95
         && metrics.refusalAccuracy === 1;
+
+    if (!ollamaUp) {
+        console.log('\nEval incomplete: Ollama is not running. Start Ollama, pull models, then re-run.');
+        process.exit(2);
+    }
 
     process.exit(ok ? 0 : 1);
 }
