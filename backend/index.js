@@ -4,6 +4,7 @@ const path = require('path');
 require('dotenv').config();
 const { sourceDb, userDb, dbQuery, dbGet, dbRun } = require('./db');
 const { answerQuestion } = require('./ai');
+const { runAgent } = require('./agent');
 
 const app = express();
 app.use(express.json());
@@ -153,6 +154,18 @@ app.post('/api/ask', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to answer question' });
+    }
+});
+
+app.post('/api/agent', async (req, res) => {
+    try {
+        const { question } = req.body;
+        if (!question) return res.status(400).json({ error: 'question required' });
+        const result = await runAgent(question);
+        res.json(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to run agent' });
     }
 });
 

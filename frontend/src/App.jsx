@@ -6,6 +6,7 @@ import TrialExplorer from './pages/TrialExplorer';
 import TrialDetail from './pages/TrialDetail';
 import Watchlist from './pages/Watchlist';
 import AskAI from './pages/AskAI';
+import AgentBriefing from './pages/AgentBriefing';
 
 function App() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -29,6 +30,7 @@ function App() {
             <Routes>
               <Route path="/" element={<TrialExplorer activeSearch={activeSearch} />} />
               <Route path="/ask" element={<AskAI />} />
+              <Route path="/agent" element={<AgentBriefing />} />
               <Route path="/trial/:nctId" element={<TrialDetail />} />
               <Route path="/watchlist" element={<Watchlist />} />
             </Routes>

@@ -7,7 +7,8 @@
     "dev": "nodemon index.js",
     "eval": "node eval.js",
     "diagnose": "node diagnose_rag.js",
-    "diagnose:corpus": "node diagnose_corpus_offline.js"
+    "diagnose:corpus": "node diagnose_corpus_offline.js",
+    "eval:agent": "node eval_agent.js"
   },
   "keywords": [],
   "author": "",
